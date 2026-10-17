@@ -543,11 +543,10 @@
         <div class="section-head" style="margin-bottom:10px"><h2>条件式交易方案</h2><span class="hint">未连接券商，只生成人工审核单</span></div>
         <div class="control-row">
           <label class="field">账户资金（元）<input id="accountInput" type="number" min="1000" step="1000" value="50000"></label>
-          <label class="field">单笔风险预算
+          <label class="field">单笔最大亏损（含成本≤1%）
             <select id="riskBudget">
               <option value="0.005">0.5%</option>
-              <option value="0.008" selected>0.8%</option>
-              <option value="0.015">1.5%</option>
+              <option value="0.009" selected>0.9%</option>
             </select>
           </label>
           <label class="field">候选标的<select id="confirmSelect"></select></label>
@@ -862,7 +861,7 @@ function renderRisk(c) {
   const rankLabel = passIdx >= 0 ? `硬过滤排名 ${passIdx + 1}` : `全池排名 ${c.rank}`;
   $("#riskMeta").textContent = `${c.index_name || "—"} · ${c.subtype || "—"} · 综合分 ${fmtNum(c.composite, 2)} · ${rankLabel}`;
   const net = c.metrics.net_expected_return;
-  const plan = computePlan(c, Number($("#accountInput").value || 50000), Number($("#riskBudget").value || 0.008));
+  const plan = computePlan(c, Number($("#accountInput").value || 50000), Number($("#riskBudget").value || 0.009));
   const corr = c.peers[0];
   const corrWarn = !!corr && corr.corr > 0.9;
   const checks = [
@@ -904,7 +903,7 @@ function computePlan(c, account, riskBudget) {
 }
 
 function renderConfirm(c) {
-  const plan = computePlan(c, Number($("#accountInput").value || 50000), Number($("#riskBudget").value || 0.008));
+  const plan = computePlan(c, Number($("#accountInput").value || 50000), Number($("#riskBudget").value || 0.009));
   const ok = c.status === "candidate" && plan.net > 0 && plan.shares > 0;
   $("#confirmCallout").innerHTML = `<div class="callout ${ok ? "ok" : "bad"}">
     <h3>${ok ? "待人工确认" : "今日不可下单"}</h3>
@@ -925,7 +924,7 @@ function renderConfirm(c) {
   const gap = -0.05 * plan.value;
   const pnl = [
     ["跳空压力 (-5%)", gap, "无法按计划止损"],
-    ["止损触发", stopLoss, `止损距离 ${(plan.stopPct * 100).toFixed(2)}%`],
+    ["硬止损触发", stopLoss, `止损距离 ${(plan.stopPct * 100).toFixed(2)}% · 约${(plan.riskBudget * 100).toFixed(1)}%本金`],
     ["基准净预期（未计止损）", netAmount, "10日动量 − 成本"],
     ["2R 目标", target, `目标 ${(2 * plan.stopPct * 100).toFixed(2)}%`],
   ];
@@ -947,11 +946,13 @@ function renderConfirm(c) {
       `<span><i class="dot ${v < 0 ? "loss" : "gain"}"></i>${k} <b>${fmtSignedMoney(v)}</b></span>`).join("")}</div>`;
   $("#pnlNote").textContent = `以上为 ${fmtMoney(plan.value)} 仓位的金额化情景测算，不是概率预测；止损按次日开盘成交，跳空/涨跌停/流动性下降可能使实际亏损超过止损情景。基准净预期按 10 日动量外推、未考虑止损。`;
   $("#rulesBox").innerHTML = [
-    ["入场", "次日开盘买入；若开盘跳空超过 1.5%，放弃或重新评估。"],
+    ["入场", "次日开盘；20日趋势>0 且 20日均线>60日均线 且 净预期>0；否则空仓。"],
+    ["硬止损", `入场价 ×(1−${(plan.stopPct * 100).toFixed(2)}%) ≈ ${(plan.price * (1 - plan.stopPct)).toFixed(3)} 元；计划亏损 ${fmtSignedMoney(-plan.account * plan.riskBudget)}（含成本≤本金1%）。`],
+    ["移动止盈", "盈利达到 1R 后，按 2×ATR 追踪最高收盘价；跌破追踪价退出。"],
     ["失效", "收盘跌破 10 日均线，或净预期收益转负。"],
-    ["退出", "最长持有 12 个交易日；跌破 10 日均线或入场价 ×(1−max(2×ATR,2%)) 收盘退出。"],
-    ["风险", "止损按次日开盘成交，不保证触发价；跳空/涨跌停/流动性下降可能扩大损失。"],
-    ["仓位", "单 ETF ≤50%；同指数/同风格不重复；允许空仓。"],
+    ["退出", "最长持有 12 个交易日；硬止损/移动止盈/跌破10日均线。"],
+    ["风险", "单笔计划亏损≤本金1%；跳空/跌停可能超过，止损不保证触发价。"],
+    ["仓位", "单ETF≤50%；同指数不重复；允许长期空仓。"],
   ].map(([k, v]) => `<div class="rule"><b>${k}</b><span>${v}</span></div>`).join("");
   $("#confirmChecks").innerHTML = [
     "已核对数据日期与基金类型",
