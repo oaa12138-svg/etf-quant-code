@@ -971,12 +971,12 @@ function updateConfirmProgress() {
 
 function renderHistory() {
   $("#historyWindow").textContent = DATA.history.window;
-  $("#historyVerdict").textContent = "回撤控制达标（全程 -8.8%、样本外 -3.3%），但收益与稳健性不达标；固定池反而略优于全市场动态池。结论：只做纸面/模拟交易，不使用真实资金。";
+  $("#historyVerdict").textContent = DATA.history.verdict || "回撤控制优先；收益与稳健性仍需验证。";
   const rowHtml = (x) => `<tr><td>${x.strategy}</td><td class="num ${x.annual_return < 0 ? "neg" : ""}">${fmtPct(x.annual_return)}</td><td class="num neg">${fmtPct(x.max_drawdown)}</td><td class="num">${fmtNum(x.sharpe, 2)}</td><td class="num">${x.n_trades || "—"}</td></tr>`;
   $("#fullBody").innerHTML = DATA.history.full.map(rowHtml).join("");
   $("#oosBody").innerHTML = DATA.history.oos.map(rowHtml).join("");
   $("#fixedBody").innerHTML = DATA.history.fixed_vs_dynamic.map(rowHtml).join("");
-  $("#fixedNote").textContent = "固定 4 只池（沪深300/中证500/创业板/科创50）在本窗口内全面优于全市场动态池；自动筛选尚未证明 α。";
+  $("#fixedNote").textContent = `固定 4 只池与全市场动态池同口径对比；现金按 ${(DATA.history.cash_yield * 100).toFixed(1)}%/年计息。`;
   $("#sensBody").innerHTML = DATA.history.sensitivity.map(x => `<tr><td>${x.case}</td><td class="num ${x.annual_return < 0 ? "neg" : ""}">${fmtPct(x.annual_return)}</td><td class="num neg">${fmtPct(x.max_drawdown)}</td><td class="num">${fmtNum(x.sharpe, 2)}</td></tr>`).join("");
 }
 
