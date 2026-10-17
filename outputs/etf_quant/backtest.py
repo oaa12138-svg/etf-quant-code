@@ -49,7 +49,7 @@ def run_signal_strategy(
     max_positions: int = 1,
     max_hold: int = MAX_HOLD,
     stop_atr: float = 2.0,
-    risk_budget: float = 0.008,
+    risk_budget: float = 0.009,
     max_fraction: float = 0.50,
     min_score: float = 0.0,
     top_k: int = 3,
@@ -58,6 +58,9 @@ def run_signal_strategy(
     use_net_gate: bool = True,
     cash_yield: float = BACKTEST["cash_yield"],
     price_panel: pd.DataFrame | None = None,
+    trail_atr: float = 2.0,
+    trail_activate_r: float = 1.0,
+    use_right_side: bool = True,
 ):
     """返回 (equity, trades, cash, exposure)。"""
     price_panel = panel if price_panel is None else price_panel
@@ -114,7 +117,7 @@ def run_signal_strategy(
                 positions[code] = {
                     "shares": shares, "entry_price": px, "entry_date": day,
                     "stop_pct": od["stop_pct"], "atr_pct": od["atr_pct"],
-                    "buy_cost": cost,
+                    "buy_cost": cost, "highest_close": px, "trail_price": None,
                 }
                 executed.append(od)
             else:
@@ -133,6 +136,7 @@ def run_signal_strategy(
                     "exit_price": px, "pnl": pnl, "cost": total_cost,
                     "holding_days": (day - pos["entry_date"]).days,
                     "gross_value": shares * pos["entry_price"],
+                    "exit_reason": od.get("reason", ""),
                 })
                 pos["shares"] -= shares
                 if pos["shares"] <= 0:
@@ -157,6 +161,22 @@ def run_signal_strategy(
         equity_hist[day] = equity
         cash_hist[day] = cash
 
+        # 移动止盈：盈利达到 1R 后，按 trail_atr × ATR 追踪最高收盘价
+        for code, pos in positions.items():
+            c = close_of(code, day)
+            if c is None:
+                continue
+            pos["highest_close"] = max(pos.get("highest_close", pos["entry_price"]), c)
+            risk_per_share = pos["entry_price"] * pos["stop_pct"]
+            if risk_per_share <= 0:
+                continue
+            r_gain = (pos["highest_close"] - pos["entry_price"]) / risk_per_share
+            if r_gain >= trail_activate_r:
+                trail_dist = trail_atr * pos["atr_pct"] * pos["entry_price"]
+                new_trail = pos["highest_close"] - trail_dist
+                prev = pos.get("trail_price")
+                pos["trail_price"] = new_trail if prev is None else max(prev, new_trail)
+
         # 当日收盘生成信号 -> 次日开盘执行
         pending = []
 
@@ -169,15 +189,18 @@ def run_signal_strategy(
             c = row["close_adj"]
             sma10 = row.get("sma10")
             hold_days = (day - pos["entry_date"]).days
-            exit_signal = False
+            exit_reason = None
             if hold_days >= max_hold:
-                exit_signal = True
+                exit_reason = "time"
+            elif pos.get("trail_price") is not None and c < pos["trail_price"]:
+                exit_reason = "trail"
             elif pd.notna(sma10) and c < sma10:
-                exit_signal = True
+                exit_reason = "trend"
             elif c <= pos["entry_price"] * (1 - pos["stop_pct"]):
-                exit_signal = True
-            if exit_signal:
-                pending.append({"code": code, "side": "sell", "shares": pos["shares"]})
+                exit_reason = "stop"
+            if exit_reason:
+                pending.append({"code": code, "side": "sell", "shares": pos["shares"],
+                                "reason": exit_reason})
 
         # 2) 入场信号
         if use_market_gate and gate.get(day, 1.0) != 1.0:
@@ -188,7 +211,10 @@ def run_signal_strategy(
             if slots > 0 and cash > 1000:
                 g = by_date.get(day)
                 if g is not None:
-                    cand = g.dropna(subset=[rank_col, "ret10", "vol20", "atr_pct", "adv20"])
+                    cand = g.dropna(subset=[
+                        rank_col, "ret10", "vol20", "atr_pct",
+                        "adv20", "adv60", "trend20", "sma20", "sma60",
+                    ])
                     cand = cand[cand.index.isin(set(open_map) & set(cand.index))]
                     held = set(positions)
                     cand = cand[~cand.index.isin(held)]
@@ -196,7 +222,10 @@ def run_signal_strategy(
                         cand = cand[(cand["vol20"] <= MAX_VOL20_ANN) & (cand["atr_pct"] <= MAX_ATR_PCT)]
                     if use_net_gate:
                         cand = cand[cand["net_expected_return"] > 0]
-                    cand = cand[cand["adv20"] >= UNIVERSE["min_adv20"]]
+                    cand = cand[(cand["adv20"] >= UNIVERSE["min_adv20"])
+                                & (cand["adv60"] >= UNIVERSE["min_adv60"])]
+                    if use_right_side:
+                        cand = cand[(cand["trend20"] > 0) & (cand["sma20"] > cand["sma60"])]
                     cand = cand[cand[rank_col] >= min_score].sort_values(rank_col, ascending=False)
                     if not cand.empty:
                         for code in cand.index[:top_k]:
