@@ -892,7 +892,8 @@ function computePlan(c, account, riskBudget) {
   const atr = c.metrics.atr_ratio;
   const stopPct = Math.max(2 * atr, 0.02);
   const riskValue = account * riskBudget;
-  const targetValue = Math.min(riskValue / stopPct, account * 0.5);
+  // 开仓金额打 8 折，为 T+1 开盘跳空留缓冲
+  const targetValue = Math.min(riskValue / stopPct, account * 0.5) * 0.8;
   const shares = Math.floor(targetValue / price / 100) * 100;
   const value = shares * price;
   const perSideCommission = Math.max(value * 0.0001, 5);
@@ -924,7 +925,7 @@ function renderConfirm(c) {
   const gap = -0.05 * plan.value;
   const pnl = [
     ["跳空压力 (-5%)", gap, "无法按计划止损"],
-    ["硬止损触发", stopLoss, `止损距离 ${(plan.stopPct * 100).toFixed(2)}% · 约${(plan.riskBudget * 100).toFixed(1)}%本金`],
+    ["硬止损触发", stopLoss, `止损距离 ${(plan.stopPct * 100).toFixed(2)}% · 约${(plan.riskBudget * 0.8 * 100).toFixed(1)}%本金`],
     ["基准净预期（未计止损）", netAmount, "10日动量 − 成本"],
     ["2R 目标", target, `目标 ${(2 * plan.stopPct * 100).toFixed(2)}%`],
   ];
@@ -944,11 +945,12 @@ function renderConfirm(c) {
     </div>
     <div class="pnl-legend">${pnl.map(([k, v]) =>
       `<span><i class="dot ${v < 0 ? "loss" : "gain"}"></i>${k} <b>${fmtSignedMoney(v)}</b></span>`).join("")}</div>`;
-  $("#pnlNote").textContent = `以上为 ${fmtMoney(plan.value)} 仓位的金额化情景测算，不是概率预测；止损按次日开盘成交，跳空/涨跌停/流动性下降可能使实际亏损超过止损情景。基准净预期按 10 日动量外推、未考虑止损。`;
+  $("#pnlNote").textContent = `以上为 ${fmtMoney(plan.value)} 仓位的金额化情景测算，不是概率预测；开仓金额已按 80% 折算，为 T+1 跳空留缓冲。止损按次日开盘成交，跳空/跌停/流动性下降仍可能使实际亏损超过止损情景。基准净预期按 10 日动量外推、未考虑止损。`;
   $("#rulesBox").innerHTML = [
     ["入场", "次日开盘；20日趋势>0 且 20日均线>60日均线 且 净预期>0；否则空仓。"],
-    ["硬止损", `入场价 ×(1−${(plan.stopPct * 100).toFixed(2)}%) ≈ ${(plan.price * (1 - plan.stopPct)).toFixed(3)} 元；计划亏损 ${fmtSignedMoney(-plan.account * plan.riskBudget)}（含成本≤本金1%）。`],
+    ["硬止损", `入场价 ×(1−${(plan.stopPct * 100).toFixed(2)}%) ≈ ${(plan.price * (1 - plan.stopPct)).toFixed(3)} 元；计划亏损 ${fmtSignedMoney(-plan.account * plan.riskBudget * 0.8)}（约0.72%本金；含成本≤1%）。`],
     ["移动止盈", "盈利达到 1R 后，按 2×ATR 追踪最高收盘价；跌破追踪价退出。"],
+    ["跳空缓冲", "开仓金额按 80% 折算；-3% 跳空约亏 0.66% 本金，-5% 跳空仍可能接近 1%。"],
     ["失效", "收盘跌破 10 日均线，或净预期收益转负。"],
     ["退出", "最长持有 12 个交易日；硬止损/移动止盈/跌破10日均线。"],
     ["风险", "单笔计划亏损≤本金1%；跳空/跌停可能超过，止损不保证触发价。"],
@@ -977,7 +979,12 @@ function renderHistory() {
   $("#fullBody").innerHTML = DATA.history.full.map(rowHtml).join("");
   $("#oosBody").innerHTML = DATA.history.oos.map(rowHtml).join("");
   $("#fixedBody").innerHTML = DATA.history.fixed_vs_dynamic.map(rowHtml).join("");
-  $("#fixedNote").textContent = `固定 4 只池与全市场动态池同口径对比；现金按 ${(DATA.history.cash_yield * 100).toFixed(1)}%/年计息。`;
+  const fp = DATA.history.fixed_pool || {};
+  $("#fixedNote").textContent =
+    `样本起点固定池：${fp.asof || "—"} 按当时 ADV20 选出 ${(fp.codes || []).join(" / ")}；` +
+    `不使用未来信息，此前后事选定的 4 只池不再作为结论依据；` +
+    `实盘仍以动态规则为主，固定池只作无事后选择的诊断基准。` +
+    `现金按 ${(DATA.history.cash_yield * 100).toFixed(1)}%/年计息。`;
   $("#sensBody").innerHTML = DATA.history.sensitivity.map(x => `<tr><td>${x.case}</td><td class="num ${x.annual_return < 0 ? "neg" : ""}">${fmtPct(x.annual_return)}</td><td class="num neg">${fmtPct(x.max_drawdown)}</td><td class="num">${fmtNum(x.sharpe, 2)}</td></tr>`).join("");
 }
 
