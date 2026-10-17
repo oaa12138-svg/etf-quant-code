@@ -16,7 +16,9 @@ from etf_quant.data.prepare import (
 )
 from etf_quant.indicators import compute_features, compute_market_env
 from etf_quant.scoring import score_panel, build_panel, market_gate
-from etf_quant.backtest import run_signal_strategy, run_buy_hold, run_equal_weight
+from etf_quant.backtest import (
+    run_signal_strategy, run_buy_hold, run_equal_weight, dynamic_dedupe,
+)
 from etf_quant.metrics import performance, sub_period_table
 
 
@@ -29,6 +31,8 @@ def load_representatives() -> pd.DataFrame:
 
 
 def build_data(rep: pd.DataFrame):
+    meta = rep[["code", "index_key"]].copy()
+    meta["code"] = meta["code"].astype(str)
     features = {}
     klines = {}
     for _, r in rep.iterrows():
@@ -41,20 +45,22 @@ def build_data(rep: pd.DataFrame):
             continue
         klines[code] = k
         features[code] = compute_features(k)
-    panel = build_panel(features)
+    panel = build_panel(features).merge(meta, on="code", how="left")
     scored = score_panel(panel)
     return scored, klines
 
 
 def main() -> None:
-    print("加载代表池与市场指数 ...", flush=True)
-    rep = load_representatives()
+    print("加载宽基池与市场指数 ...", flush=True)
+    meta = load_broad_meta()
+    meta["code"] = meta["code"].astype(str)
     env_raw = load_market_indices()
     env = compute_market_env(env_raw)
     env["gate"] = market_gate(env)
 
     print("计算特征与评分 ...", flush=True)
-    scored, _ = build_data(rep)
+    scored_all, _ = build_data(meta)
+    scored = dynamic_dedupe(scored_all)
 
     calendar = env.index.intersection(pd.DatetimeIndex(scored["date"].unique())).sort_values()
     calendar = pd.DatetimeIndex(calendar)
@@ -63,11 +69,16 @@ def main() -> None:
     # 硬性流动性门槛下的可交易数量（截至最新）
     latest = scored[scored["date"] == scored["date"].max()]
     pass_filter = latest[latest["adv20"] >= UNIVERSE["min_adv20"]]
-    print(f"代表池 {rep['code'].nunique()} 只；最新日通过硬性流动性门槛（20 日均成交额≥2000万）：{pass_filter['code'].nunique()} 只", flush=True)
+    print(
+        f"宽基 {meta['code'].nunique()} 只；动态去重后最新日 {latest['code'].nunique()} 只；"
+        f"通过硬性流动性门槛（20 日均成交额≥2000万）：{pass_filter['code'].nunique()} 只",
+        flush=True,
+    )
 
     def run_sig(rank_col, **kw):
         return run_signal_strategy(scored, env, calendar, rank_col=rank_col,
-                                   initial_cash=BACKTEST["initial_cash"], **kw)
+                                   initial_cash=BACKTEST["initial_cash"],
+                                   price_panel=scored_all, **kw)
 
     def _bh_series(s: pd.Series):
         if s is None or s.empty:
@@ -77,8 +88,8 @@ def main() -> None:
         return s, pd.DataFrame(), cash, exp
 
     strategies = {
-        "买入持有(沪深300ETF)": _bh_series(run_buy_hold(scored, "510300", BACKTEST["initial_cash"])),
-        "买入持有(中证500ETF)": _bh_series(run_buy_hold(scored, "510500", BACKTEST["initial_cash"])),
+        "买入持有(沪深300ETF)": _bh_series(run_buy_hold(scored_all, "510300", BACKTEST["initial_cash"])),
+        "买入持有(中证500ETF)": _bh_series(run_buy_hold(scored_all, "510500", BACKTEST["initial_cash"])),
         "全宽基等权(不计成本)": _bh_series(run_equal_weight(scored, BACKTEST["initial_cash"])),
         "纯短期动量": run_sig("score_momentum", use_risk_filter=False,
                               use_market_gate=False, use_net_gate=False),
