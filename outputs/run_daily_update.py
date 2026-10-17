@@ -17,7 +17,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -116,7 +116,7 @@ def main() -> None:
             pass
 
     obj = {
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "updated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
         "data_date": str(latest.date()) if latest is not None else None,
         "universe_total": int(len(univ)) if univ is not None else None,
         "broad_meta_rows": int(len(meta)) if meta is not None else None,
