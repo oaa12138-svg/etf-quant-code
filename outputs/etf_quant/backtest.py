@@ -61,6 +61,7 @@ def run_signal_strategy(
     trail_atr: float = 2.0,
     trail_activate_r: float = 1.0,
     use_right_side: bool = True,
+    gap_buffer: float = BACKTEST["gap_buffer"],
 ):
     """返回 (equity, trades, cash, exposure)。"""
     price_panel = panel if price_panel is None else price_panel
@@ -237,7 +238,8 @@ def run_signal_strategy(
                             price = float(row["close_adj"])
                             shares = size_position(
                                 equity, price, atr_pct, risk_budget=risk_budget,
-                                stop_atr=stop_atr, max_fraction=max_fraction)
+                                stop_atr=stop_atr, max_fraction=max_fraction,
+                                gap_buffer=gap_buffer)
                             if shares <= 0:
                                 continue
                             pending.append({
