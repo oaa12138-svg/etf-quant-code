@@ -31,7 +31,8 @@ def load_representatives() -> pd.DataFrame:
 
 
 def build_data(rep: pd.DataFrame):
-    meta = rep[["code", "index_key"]].copy()
+    cols = ["code", "index_key"] + (["broad_subtype"] if "broad_subtype" in rep.columns else [])
+    meta = rep[cols].copy()
     meta["code"] = meta["code"].astype(str)
     features = {}
     klines = {}
