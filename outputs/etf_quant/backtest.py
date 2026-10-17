@@ -5,13 +5,25 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .config import COST, UNIVERSE
+from .config import BACKTEST, COST, UNIVERSE
 from .position import size_position, round_trade_cost
 
 
 MAX_HOLD = 12          # 最长持有交易日（约两周）
 MAX_VOL20_ANN = 0.40   # 20 日年化波动率上限（风险过滤）
 MAX_ATR_PCT = 0.045    # ATR/价格上限
+
+
+def dynamic_dedupe(panel: pd.DataFrame) -> pd.DataFrame:
+    """每个交易日、每个跟踪指数只保留 trailing ADV20 最大的 ETF。
+
+    只使用当日及之前的 adv20，不使用未来流动性，避免“今天最活跃的 ETF
+    被选去交易整个历史”的前视偏差。
+    """
+    p = panel.dropna(subset=["adv20", "index_key"]).copy()
+    p = p.sort_values(["date", "index_key", "adv20"],
+                      ascending=[True, True, False])
+    return p.drop_duplicates(["date", "index_key"], keep="first").reset_index(drop=True)
 
 
 def _trade_cost(value: float) -> float:
@@ -44,10 +56,14 @@ def run_signal_strategy(
     initial_cash: float = 50_000.0,
     cost_scale: float = 1.0,
     use_net_gate: bool = True,
+    cash_yield: float = BACKTEST["cash_yield"],
+    price_panel: pd.DataFrame | None = None,
 ):
     """返回 (equity, trades, cash, exposure)。"""
-    open_map = build_open_map(panel)
+    price_panel = panel if price_panel is None else price_panel
+    open_map = build_open_map(price_panel)
     by_date = {d: g.set_index("code") for d, g in panel.groupby("date")}
+    price_by_date = {d: g.set_index("code") for d, g in price_panel.groupby("date")}
     gate = env["gate"] if "gate" in env else pd.Series(1.0, index=env.index)
 
     def cost_fn(value: float) -> float:
@@ -61,7 +77,7 @@ def run_signal_strategy(
     cash_hist: dict[pd.Timestamp, float] = {}
 
     def close_of(code: str, d) -> float | None:
-        g = by_date.get(d)
+        g = price_by_date.get(d)
         if g is not None and code in g.index:
             v = g.loc[code, "close_adj"]
             return float(v) if pd.notna(v) else None
@@ -126,6 +142,9 @@ def run_signal_strategy(
 
     for i, day in enumerate(calendar):
         execute(day)
+        # 现金收益：按年化 cash_yield 折算到每个交易日
+        if cash_yield:
+            cash *= (1.0 + cash_yield) ** (1.0 / 244.0)
 
         # 持仓市值（收盘）
         mv = 0.0
@@ -143,7 +162,7 @@ def run_signal_strategy(
 
         # 1) 退出信号（当日收盘判定）
         for code, pos in list(positions.items()):
-            g = by_date.get(day)
+            g = price_by_date.get(day)
             if g is None or code not in g.index:
                 continue
             row = g.loc[code]
