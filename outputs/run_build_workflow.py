@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -421,7 +421,7 @@ def build_data() -> dict:
     return {
         "meta": {
             "data_date": str(latest_date.date()),
-            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "generated_at": datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M"),
             "total_etfs": int(len(univ)),
             "broad_etfs": int(len(broad)),
             "representatives": int(len(rep)),
