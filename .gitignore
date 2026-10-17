@@ -1,0 +1,6 @@
+work/
+**/__pycache__/
+*.pyc
+*.log
+outputs/recommendation_workflow.html
+outputs/upload.json
