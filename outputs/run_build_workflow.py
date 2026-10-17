@@ -20,7 +20,9 @@ from etf_quant.config import BACKTEST, CONVENTIONS, COST, UNIVERSE
 from etf_quant.data.prepare import load_broad_meta, select_representatives, load_market_indices
 from etf_quant.indicators import compute_market_env
 from etf_quant.scoring import market_gate
-from etf_quant.backtest import run_signal_strategy, run_buy_hold, run_equal_weight
+from etf_quant.backtest import (
+    run_signal_strategy, run_buy_hold, run_equal_weight, dynamic_dedupe,
+)
 from etf_quant.metrics import performance
 from etf_quant.baseline import round_trip_cost_rate
 from run_backtest import build_data
@@ -119,24 +121,26 @@ def _status(checks: dict) -> tuple[str, str]:
 
 
 def build_data() -> dict:
-    rep = select_representatives(load_broad_meta())
-    rep["code"] = rep["code"].astype(str)
+    all_broad = load_broad_meta()
+    all_broad["code"] = all_broad["code"].astype(str)
+    rep = select_representatives(all_broad)
     env = compute_market_env(load_market_indices())
     env["gate"] = market_gate(env)
-    scored, _ = build_data_impl(rep)
-    scored["code"] = scored["code"].astype(str)
+    scored_all, _ = build_data_impl(all_broad)
+    scored_all["code"] = scored_all["code"].astype(str)
+    scored_dyn = dynamic_dedupe(scored_all)
 
-    latest_date = scored["date"].max()
-    latest = scored[scored["date"] == latest_date].copy()
-    meta = rep[["code", "name", "index_key", "broad_subtype",
-                "history_days", "total_fee"]].rename(
+    latest_date = scored_all["date"].max()
+    latest = scored_dyn[scored_dyn["date"] == latest_date].copy()
+    meta = all_broad[["code", "name", "index_key", "broad_subtype",
+                      "history_days", "total_fee"]].rename(
         columns={"index_key": "index_name", "broad_subtype": "subtype"})
     latest = latest.merge(meta, on="code", how="left")
     latest = latest.sort_values("composite", ascending=False).reset_index(drop=True)
     latest["rank"] = range(1, len(latest) + 1)
 
     # 相关性（最近 60 个交易日日收益）
-    ret = scored.pivot_table(index="date", columns="code", values="ret1").tail(60)
+    ret = scored_all.pivot_table(index="date", columns="code", values="ret1").tail(60)
     corr = ret.corr()
     peers: dict[str, list[dict]] = {}
     for code in latest["code"]:
@@ -321,12 +325,13 @@ def build_data() -> dict:
     }
 
     # 历史检验（全周期 + 样本外）
-    cal = pd.DatetimeIndex(env.index.intersection(pd.DatetimeIndex(scored["date"].unique())).sort_values())
-    model = run_signal_strategy(scored, env, cal, rank_col="composite",
+    cal = pd.DatetimeIndex(env.index.intersection(pd.DatetimeIndex(scored_dyn["date"].unique())).sort_values())
+    model = run_signal_strategy(scored_dyn, env, cal, rank_col="composite",
                                 use_risk_filter=True, use_market_gate=True,
-                                use_net_gate=True, initial_cash=BACKTEST["initial_cash"])
+                                use_net_gate=True, initial_cash=BACKTEST["initial_cash"],
+                                price_panel=scored_all)
     fixed_codes = ["510300", "510500", "159915", "588000"]
-    fixed = run_signal_strategy(scored[scored["code"].isin(fixed_codes)], env, cal,
+    fixed = run_signal_strategy(scored_all[scored_all["code"].isin(fixed_codes)], env, cal,
                                 rank_col="composite", use_risk_filter=True,
                                 use_market_gate=True, use_net_gate=True,
                                 initial_cash=BACKTEST["initial_cash"])
@@ -346,9 +351,9 @@ def build_data() -> dict:
     oos_start = pd.Timestamp(BACKTEST["test_start"])
     full, oos = [], []
     specs = [
-        ("买入持有 沪深300ETF", lambda: run_buy_hold(scored, "510300")),
-        ("买入持有 中证500ETF", lambda: run_buy_hold(scored, "510500")),
-        ("全宽基等权（不计成本）", lambda: run_equal_weight(scored)),
+        ("买入持有 沪深300ETF", lambda: run_buy_hold(scored_all, "510300")),
+        ("买入持有 中证500ETF", lambda: run_buy_hold(scored_all, "510500")),
+        ("全宽基等权（不计成本）", lambda: run_equal_weight(scored_dyn)),
         ("多因子综合模型", lambda: model[0]),
     ]
     for name, fn in specs:
@@ -375,9 +380,20 @@ def build_data() -> dict:
                                             fixed[1][fixed[1]["exit_date"] >= oos_start] if len(fixed[1]) else fixed[1]))
     fixed_vs_dynamic.append(fixed_oos)
 
+    model_full = next(x for x in full if x["strategy"] == "多因子综合模型")
+    model_oos = next(x for x in oos if x["strategy"] == "多因子综合模型")
+    history_verdict = (
+        f"回撤控制：全程 {model_full['max_drawdown']*100:.1f}%、"
+        f"样本外 {model_oos['max_drawdown']*100:.1f}%；"
+        f"年化：全程 {model_full['annual_return']*100:.2f}%、"
+        f"样本外 {model_oos['annual_return']*100:.2f}%；"
+        f"固定池与全市场动态池的同口径对比见下表。"
+        f"结论：回撤控制优先，收益/稳健性仍需继续验证，当前只适合纸面或模拟交易。"
+    )
+
     sens = pd.read_csv(OUT / "sensitivity.csv", encoding="utf-8-sig")
     sensitivity = []
-    for _, r in sens.head(10).iterrows():
+    for _, r in sens.head(12).iterrows():
         sensitivity.append({
             "case": str(r.iloc[0]),
             "annual_return": round(float(r["annual_return"]), 4),
@@ -445,6 +461,8 @@ def build_data() -> dict:
         "history": {"full": full, "oos": oos,
                     "fixed_vs_dynamic": fixed_vs_dynamic,
                     "sensitivity": sensitivity,
+                    "verdict": history_verdict,
+                    "cash_yield": BACKTEST["cash_yield"],
                     "window": f"{cal.min().date()} ~ {cal.max().date()}"},
     }
 
