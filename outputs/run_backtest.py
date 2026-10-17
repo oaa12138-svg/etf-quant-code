@@ -71,7 +71,7 @@ def main() -> None:
     pass_filter = latest[latest["adv20"] >= UNIVERSE["min_adv20"]]
     print(
         f"宽基 {meta['code'].nunique()} 只；动态去重后最新日 {latest['code'].nunique()} 只；"
-        f"通过硬性流动性门槛（20 日均成交额≥2000万）：{pass_filter['code'].nunique()} 只",
+        f"通过硬性流动性门槛（20/60 日均成交额≥5亿）：{pass_filter['code'].nunique()} 只",
         flush=True,
     )
 
@@ -92,7 +92,8 @@ def main() -> None:
         "买入持有(中证500ETF)": _bh_series(run_buy_hold(scored_all, "510500", BACKTEST["initial_cash"])),
         "全宽基等权(不计成本)": _bh_series(run_equal_weight(scored, BACKTEST["initial_cash"])),
         "纯短期动量": run_sig("score_momentum", use_risk_filter=False,
-                              use_market_gate=False, use_net_gate=False),
+                              use_market_gate=False, use_net_gate=False,
+                              use_right_side=False),
         "动量+风险过滤": run_sig("score_momentum", use_risk_filter=True,
                                 use_market_gate=True, use_net_gate=True),
         "多因子综合模型": run_sig("composite", use_risk_filter=True,
