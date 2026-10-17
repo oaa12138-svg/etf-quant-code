@@ -61,6 +61,7 @@ BACKTEST = {
     "test_start": "2025-07-01",   # 样本外测试起点
     "signal_lag": 1,              # 收盘信号 -> 次日成交（默认）
     "initial_cash": 50_000.0,
+    "cash_yield": 0.015,          # 现金/货币基金年化收益（保守假设）
 }
 
 
