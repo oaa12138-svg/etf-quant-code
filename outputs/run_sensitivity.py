@@ -48,6 +48,8 @@ def main() -> None:
         ("成本×3", {"cost_scale": 3.0}),
         ("现金收益=0%", {"cash_yield": 0.0}),
         ("现金收益=2%", {"cash_yield": 0.02}),
+        ("跳空缓冲=0.7", {"gap_buffer": 0.7}),
+        ("跳空缓冲=1.0", {"gap_buffer": 1.0}),
         ("单ETF上限=100%", {"max_fraction": 1.0}),
         ("最大持仓=3只", {"max_positions": 3, "max_fraction": 0.4}),
     ]
