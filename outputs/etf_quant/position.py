@@ -10,7 +10,7 @@ from .config import COST
 def size_position(equity: float, price: float, atr_pct: float,
                   risk_budget: float = 0.008, stop_atr: float = 2.0,
                   max_fraction: float = 0.50, min_trade_value: float = 3000.0,
-                  lot: int = 100) -> int:
+                  lot: int = 100, gap_buffer: float = 0.80) -> int:
     """按风险预算决定买入份数。
 
     风险敞口 = equity * risk_budget；止损距离 = stop_atr * atr_pct；
@@ -22,6 +22,7 @@ def size_position(equity: float, price: float, atr_pct: float,
     risk_value = equity * risk_budget
     target_value = risk_value / stop_pct
     target_value = min(target_value, equity * max_fraction)
+    target_value *= gap_buffer
     if target_value < min_trade_value:
         return 0
     shares = math.floor(target_value / price / lot) * lot
