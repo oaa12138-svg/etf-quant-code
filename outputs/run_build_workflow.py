@@ -120,6 +120,18 @@ def _status(checks: dict) -> tuple[str, str]:
     return "candidate", "通过全部硬性/风险检查，等待人工确认"
 
 
+def ex_ante_fixed_pool(scored_all: pd.DataFrame, asof: pd.Timestamp) -> list[str]:
+    """在样本起点按当时 ADV20 选每个宽基子类别的代表，避免事后挑赢家。"""
+    snap = scored_all[scored_all["date"] <= asof].dropna(
+        subset=["adv20", "broad_subtype"]
+    ).copy()
+    if snap.empty:
+        return []
+    last = snap.sort_values("date").groupby("code").tail(1)
+    last = last.sort_values(["broad_subtype", "adv20"], ascending=[True, False])
+    return last.drop_duplicates("broad_subtype")["code"].tolist()
+
+
 def build_data() -> dict:
     all_broad = load_broad_meta()
     all_broad["code"] = all_broad["code"].astype(str)
@@ -330,11 +342,19 @@ def build_data() -> dict:
                                 use_risk_filter=True, use_market_gate=True,
                                 use_net_gate=True, initial_cash=BACKTEST["initial_cash"],
                                 price_panel=scored_all)
-    fixed_codes = ["510300", "510500", "159915", "588000"]
-    fixed = run_signal_strategy(scored_all[scored_all["code"].isin(fixed_codes)], env, cal,
-                                rank_col="composite", use_risk_filter=True,
-                                use_market_gate=True, use_net_gate=True,
-                                initial_cash=BACKTEST["initial_cash"])
+    # 样本起点固定池：只用起点及之前的数据选代表，避免“事后挑赢家”
+    fixed_asof = cal[60] if len(cal) > 60 else cal[0]
+    fixed_codes = ex_ante_fixed_pool(scored_all, fixed_asof)
+    cal_fixed = cal[cal >= fixed_asof]
+    fixed = run_signal_strategy(
+        scored_all[scored_all["code"].isin(fixed_codes)], env, cal_fixed,
+        rank_col="composite", use_risk_filter=True,
+        use_market_gate=True, use_net_gate=True,
+        initial_cash=BACKTEST["initial_cash"], price_panel=scored_all)
+    model_fixed = run_signal_strategy(
+        scored_dyn, env, cal_fixed, rank_col="composite",
+        use_risk_filter=True, use_market_gate=True, use_net_gate=True,
+        initial_cash=BACKTEST["initial_cash"], price_panel=scored_all)
 
     def p(eq, tr=None):
         return performance(eq, tr)
@@ -372,12 +392,12 @@ def build_data() -> dict:
             x["sharpe"] = round(float(performance(model[0].loc[oos_start:], oos_trades).get("sharpe", np.nan)), 3)
 
     fixed_vs_dynamic = [
-        row("固定 4 只池", p(fixed[0], fixed[1])),
-        row("全市场动态池", p(model[0], model[1])),
+        row("样本起点固定池（按当时流动性）", p(fixed[0], fixed[1])),
+        row("全市场动态池（同期间）", p(model_fixed[0], model_fixed[1])),
     ]
     # 样本外固定池
-    fixed_oos = row("固定 4 只池（样本外）", p(fixed[0].loc[oos_start:],
-                                            fixed[1][fixed[1]["exit_date"] >= oos_start] if len(fixed[1]) else fixed[1]))
+    fixed_oos = row("固定池（样本外）", p(fixed[0].loc[oos_start:],
+                                         fixed[1][fixed[1]["exit_date"] >= oos_start] if len(fixed[1]) else fixed[1]))
     fixed_vs_dynamic.append(fixed_oos)
 
     model_full = next(x for x in full if x["strategy"] == "多因子综合模型")
@@ -393,7 +413,7 @@ def build_data() -> dict:
 
     sens = pd.read_csv(OUT / "sensitivity.csv", encoding="utf-8-sig")
     sensitivity = []
-    for _, r in sens.head(12).iterrows():
+    for _, r in sens.head(20).iterrows():
         sensitivity.append({
             "case": str(r.iloc[0]),
             "annual_return": round(float(r["annual_return"]), 4),
@@ -463,6 +483,7 @@ def build_data() -> dict:
                     "sensitivity": sensitivity,
                     "verdict": history_verdict,
                     "cash_yield": BACKTEST["cash_yield"],
+                    "fixed_pool": {"asof": str(fixed_asof.date()), "codes": fixed_codes},
                     "window": f"{cal.min().date()} ~ {cal.max().date()}"},
     }
 
